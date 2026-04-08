@@ -2,6 +2,10 @@
 
 A lightweight, privacy-focused Greasemonkey/Tampermonkey userscript that extracts YouTube transcripts directly from your browser session. It allows you to save timestamped transcripts as `.txt` files or send them to an LLM (via OpenRouter/OpenAI) for an instant, beautifully formatted HTML summary directly on the page.
 
+<p align="center">
+  <img src="./img/buttons.png" alt="Interface Buttons" width="600">
+</p>
+
 ## ✨ Features
 
 - **Bot-Detection Proof:** Uses your actual browser session to fetch transcripts, avoiding the IP bans common with CLI tools and scrapers.
