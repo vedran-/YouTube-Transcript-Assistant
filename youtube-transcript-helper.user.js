@@ -57,10 +57,26 @@
         const settingsBtn = document.createElement('button');
         settingsBtn.innerText = '⚙️';
         settingsBtn.style = "background: none; border: none; cursor: pointer; font-size: 16px;";
-        settingsBtn.onclick = async () => {
-            await GM.setValue("llm_api_url", prompt("API URL:", await GM.getValue("llm_api_url", "https://openrouter.ai/api/v1/chat/completions")));
-            await GM.setValue("llm_api_key", prompt("API Key:", await GM.getValue("llm_api_key", "")));
-            await GM.setValue("llm_model", prompt("Model Name:", await GM.getValue("llm_model", "google/gemini-2.0-flash-001")));
+				settingsBtn.onclick = async () => {
+            const currentUrl = await GM.getValue("llm_api_url", "https://openrouter.ai/api/v1/chat/completions");
+            const currentKey = await GM.getValue("llm_api_key", "");
+            const currentModel = await GM.getValue("llm_model", "stepfun/step-3.5-flash:free");
+
+            const newUrl = prompt("LLM API URL:", currentUrl);
+            // Only update if User didn't click Cancel (null) and didn't leave it empty
+            if (newUrl !== null && newUrl.trim() !== "") {
+                await GM.setValue("llm_api_url", newUrl.trim());
+            }
+
+            const newKey = prompt("API Key:", currentKey);
+            if (newKey !== null && newKey.trim() !== "") {
+                await GM.setValue("llm_api_key", newKey.trim());
+            }
+
+            const newModel = prompt("Model Name:", currentModel);
+            if (newModel !== null && newModel.trim() !== "") {
+                await GM.setValue("llm_model", newModel.trim());
+            }
         };
 
         container.append(aiBtn, saveBtn, settingsBtn);
