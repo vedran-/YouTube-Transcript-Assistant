@@ -29,7 +29,7 @@ Once installed, a new set of buttons will appear near the "Subscribe" button on 
 1. Click the **Settings (⚙️)** icon.
 2. Enter your **API URL** (e.g., `https://openrouter.ai/api/v1/chat/completions`).
 3. Enter your **API Key**.
-4. Enter the **Model ID** (e.g., `google/gemini-2.0-flash-001` or `openai/gpt-4o-mini`).
+4. Enter the **Model ID** (e.g., `stepfun/step-3.5-flash:free` or `nvidia/nemotron-3-super-120b-a12b:free`).
 
 ## 🛠️ Technical Details
 
