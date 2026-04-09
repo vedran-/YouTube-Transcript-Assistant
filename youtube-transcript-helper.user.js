@@ -213,30 +213,53 @@ ${safeText}`;
         });
     }
 
-    // Reuse extraction logic from previous version
-    async function getTranscriptData() {
+		async function getTranscriptData() {
         let showBtn = Array.from(document.querySelectorAll('button, tp-yt-paper-button'))
             .find(b => b.innerText?.toLowerCase().includes("show transcript"));
+
         if (!showBtn) {
             const expand = document.querySelector('tp-yt-paper-button#expand, #expand-theme, #expand');
             if (expand) expand.click();
             await new Promise(r => setTimeout(r, 800));
             showBtn = Array.from(document.querySelectorAll('button')).find(b => b.innerText?.toLowerCase().includes("show transcript"));
         }
+
         if (!showBtn) throw new Error("Transcript button not found.");
         showBtn.click();
+
         let segments = [];
+        let type = "";
+
+        // Polling loop to detect which UI version YouTube is using
         for (let i = 0; i < 15; i++) {
             await new Promise(r => setTimeout(r, 400));
+            
+            // Try Modern View Model (from your first snippet)
             segments = document.querySelectorAll('transcript-segment-view-model');
-            if (segments.length > 0) break;
+            if (segments.length > 0) { type = "modern"; break; }
+            
+            // Try Polymer Renderer (from your second snippet)
+            segments = document.querySelectorAll('ytd-transcript-segment-renderer');
+            if (segments.length > 0) { type = "polymer"; break; }
         }
-        if (segments.length === 0) throw new Error("Transcript failed to load.");
-        return Array.from(segments).map(s => ({
-            ts: s.querySelector('.ytwTranscriptSegmentViewModelTimestamp')?.innerText.trim() || "",
-            text: s.querySelector('.yt-core-attributed-string')?.innerText.trim() || ""
-        }));
-    }
+
+        if (segments.length === 0) throw new Error("Transcript failed to load or unsupported UI.");
+
+        return Array.from(segments).map(s => {
+            if (type === "modern") {
+                return {
+                    ts: s.querySelector('.ytwTranscriptSegmentViewModelTimestamp')?.innerText.trim() || "",
+                    text: s.querySelector('.yt-core-attributed-string')?.innerText.trim() || ""
+                };
+            } else {
+                // Mapping for the "Polymer" style snippets
+                return {
+                    ts: s.querySelector('.segment-timestamp')?.innerText.trim() || "",
+                    text: s.querySelector('.segment-text')?.innerText.trim() || ""
+                };
+            }
+        });
+    }  
 
     function createBtn(text, color) {
         const b = document.createElement('button');
