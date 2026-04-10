@@ -595,7 +595,15 @@ async function callLLM(messages) {
  * @returns {Promise<string>}
  */
 async function fetchSummaryWithPrompt(prompt) {
-    const systemMessage = 'You are a specialized video summarizer. Using the title, metadata, description, and transcript provided, create a comprehensive summary. Format your response using ONLY HTML tags like <p>, <b>, <ul>, <li>. Do not use Markdown.';
+    const systemMessage = `You are a specialized video summarizer. You will receive video metadata (title, description, stats) and the video's transcript.
+
+RULES:
+- Use the metadata ONLY as context to better understand the transcript.
+- Your output must be a summary of the VIDEO CONTENT itself — what the video is about, what happens, key takeaways from the transcript.
+- Do NOT summarize, repeat, or describe the video description, title, or any metadata.
+- Do NOT include sections like "Description Summary", "Video Title", "Key Points from the Transcript", etc.
+- Start directly with your summary content.
+- Format your response using ONLY HTML tags like <p>, <b>, <ul>, <li>. Do not use Markdown.`;
 
     return callLLM([
         { role: 'system', content: systemMessage },
