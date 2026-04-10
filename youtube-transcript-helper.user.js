@@ -213,8 +213,15 @@ Description: ${meta.description}
 
 Transcript: ${cleanText.substring(0, 50000)}`;
 
-                const summary = await fetchSummaryWithPrompt(prompt);
-                showSummaryInUI(summary);
+                // Step 1: Get full summary
+                aiBtn.innerText = '📝 Summarizing...';
+                const fullSummary = await fetchSummaryWithPrompt(prompt);
+                
+                // Step 2: Generate TLDR from the full summary
+                aiBtn.innerText = '✂️ Creating TLDR...';
+                const tldr = await fetchTLDR(fullSummary);
+                
+                showSummaryInUI(fullSummary, tldr);
                 aiBtn.innerText = '✅ Done!';
             } catch (e) { alert(e.message); aiBtn.innerText = '❌ Error'; }
             setTimeout(() => { aiBtn.innerText = '🤖 Summarize'; aiBtn.disabled = false; }, 3000);
@@ -331,6 +338,41 @@ ${formattedTranscript}`;
         });
     }
 
+    async function fetchTLDR(fullSummary) {
+        const url = await GM.getValue("llm_api_url", "");
+        const key = await GM.getValue("llm_api_key", "");
+        const model = await GM.getValue("llm_model", "");
+
+        const prompt = `Based on the following video summary, create a single sentence TLDR (too long didn't read) that captures the absolute core message. Return ONLY the sentence text, nothing else. No quotes, no labels, no HTML.
+
+Summary: ${fullSummary.substring(0, 10000)}`;
+
+        return new Promise((resolve, reject) => {
+            GM.xmlHttpRequest({
+                method: "POST",
+                url: url,
+                headers: { "Content-Type": "application/json", "Authorization": `Bearer ${key}`, "HTTP-Referer": "https://youtube.com", "X-Title": "YT Assistant" },
+                data: JSON.stringify({
+                    model: model,
+                    messages: [
+                        {role: "system", content: "You create concise one-sentence summaries. Return ONLY the sentence, nothing else."},
+                        {role: "user", content: prompt}
+                    ]
+                }),
+                onload: (res) => {
+                    if (res.status === 200) {
+                        let content = JSON.parse(res.responseText).choices?.[0]?.message?.content;
+                        if (content) {
+                            content = content.replace(/^["']|["']$/g, '').trim(); // Remove surrounding quotes
+                            resolve(content);
+                        } else reject(new Error("Empty TLDR response."));
+                    } else reject(new Error(`API Error ${res.status}: ${res.responseText}`));
+                },
+                onerror: reject
+            });
+        });
+    }
+
     async function fetchSummaryWithPrompt(prompt) {
         const url = await GM.getValue("llm_api_url", "");
         const key = await GM.getValue("llm_api_key", "");
@@ -361,48 +403,116 @@ ${formattedTranscript}`;
         });
     }
 
-    function showSummaryInUI(html) {
+    function showSummaryInUI(fullSummary, tldr) {
         let box = document.getElementById('ai-summary-box');
-        const cleanHtml = html.replace(/```html/gi, '').replace(/```/g, '').trim();
+        const cleanHtml = fullSummary.replace(/```html/gi, '').replace(/```/g, '').trim();
 
         if (!box) {
             box = document.createElement('div');
             box.id = 'ai-summary-box';
-            box.style = "background: var(--yt-spec-badge-chip-background, #f2f2f2); color: var(--yt-spec-text-primary, #0f0f0f); padding: 16px; margin-top: 15px; border-radius: 12px; font-family: Roboto, Arial, sans-serif; font-size: 14px; line-height: 1.6; border: 1px solid var(--yt-spec-10-percent-layer, #ccc);";
-            
-            box.innerHTML = `
-                <div style="display:flex; justify-content:space-between; align-items:center; font-weight:600; margin-bottom:8px;">
-                    <span>✨ AI Summary</span>
-                    <div style="display:flex; gap:12px;">
-                        <button id="ai-copy" title="Copy" style="background:none; border:none; cursor:pointer; font-size:16px;">📋</button>
-                        <button id="ai-fold" title="Toggle" style="background:none; border:none; cursor:pointer; font-size:14px;">▼</button>
-                    </div>
-                </div>
-                <hr style="border:0; height:1px; background:var(--yt-spec-10-percent-layer, #ccc); margin:0 0 12px 0;">
-                <div id="ai-summary-content"></div>
+            box.style.cssText = `
+                background: var(--yt-spec-badge-chip-background, #f2f2f2);
+                color: var(--yt-spec-text-primary, #0f0f0f);
+                padding: 0;
+                margin-top: 12px;
+                margin-bottom: 16px;
+                border-radius: 12px;
+                font-family: Roboto, Arial, sans-serif;
+                font-size: 14px;
+                line-height: 1.6;
+                border: 1px solid var(--yt-spec-10-percent-layer, #ccc);
+                overflow: hidden;
+                transition: all 0.2s ease;
             `;
-            
+
+            // Header - always visible, clickable to toggle
+            const header = document.createElement('div');
+            header.id = 'ai-summary-header';
+            header.style.cssText = `
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                padding: 8px 12px;
+                cursor: pointer;
+                user-select: none;
+                font-weight: 600;
+                font-size: 13px;
+            `;
+            header.innerHTML = `
+                <span style="display: flex; align-items: center; gap: 6px;">✨ AI Summary</span>
+                <div style="display: flex; align-items: center; gap: 4px;">
+                    <button id="ai-copy-btn" title="Copy to clipboard" style="background: none; border: none; cursor: pointer; font-size: 14px; padding: 4px 6px; border-radius: 4px; transition: background 0.15s;">📋</button>
+                    <span id="ai-fold-indicator" style="font-size: 11px; transition: transform 0.2s ease;">▼</span>
+                </div>
+            `;
+
+            // TLDR section - always visible, most prominent
+            const tldrSection = document.createElement('div');
+            tldrSection.id = 'ai-tldr';
+            tldrSection.style.cssText = `
+                padding: 12px 12px;
+                background: var(--yt-spec-badge-chip-background, #f2f2f2);
+                border-bottom: 1px solid var(--yt-spec-10-percent-layer, #ccc);
+                font-size: 15px;
+                font-weight: 800;
+                color: var(--yt-spec-text-primary, #0f0f0f);
+                line-height: 1.4;
+                letter-spacing: -0.01em;
+            `;
+
+            // Content area (full summary)
+            const content = document.createElement('div');
+            content.id = 'ai-summary-content';
+            content.style.cssText = `
+                padding: 10px 12px 8px 12px;
+                border-top: 1px solid var(--yt-spec-10-percent-layer, #ccc);
+                font-size: 14px;
+                line-height: 1.65;
+                transition: max-height 0.3s ease, padding 0.2s ease;
+            `;
+
+            box.appendChild(header);
+            box.appendChild(tldrSection);
+            box.appendChild(content);
+
             const anchor = document.querySelector('#above-the-fold') || document.querySelector('#meta');
             anchor.prepend(box);
 
-            box.querySelector('#ai-fold').onclick = () => {
-                const c = box.querySelector('#ai-summary-content');
-                const hr = box.querySelector('hr');
-                const isHidden = c.style.display === 'none';
-                c.style.display = isHidden ? 'block' : 'none';
-                hr.style.display = isHidden ? 'block' : 'none';
-                box.querySelector('#ai-fold').innerText = isHidden ? '▼' : '▶';
+            // Toggle fold on entire header click (only affects content, not TLDR)
+            header.onclick = () => {
+                const isHidden = content.style.display === 'none';
+                const indicator = document.getElementById('ai-fold-indicator');
+                if (isHidden) {
+                    content.style.display = 'block';
+                    content.style.maxHeight = '5000px';
+                    indicator.style.transform = 'rotate(0deg)';
+                } else {
+                    content.style.maxHeight = '0px';
+                    setTimeout(() => { if (content.style.maxHeight === '0px') content.style.display = 'none'; }, 300);
+                    indicator.style.transform = 'rotate(-90deg)';
+                }
+                box.style.paddingBottom = isHidden ? '' : '0px';
             };
 
-            box.querySelector('#ai-copy').onclick = () => {
-                navigator.clipboard.writeText(box.querySelector('#ai-summary-content').innerText);
-                box.querySelector('#ai-copy').innerText = '✅';
-                setTimeout(() => box.querySelector('#ai-copy').innerText = '📋', 2000);
+            // Copy button (copies TLDR + full summary)
+            document.getElementById('ai-copy-btn').onclick = (e) => {
+                e.stopPropagation();
+                const tldrText = document.getElementById('ai-tldr')?.innerText || '';
+                const summaryText = content.innerText;
+                navigator.clipboard.writeText(`TLDR: ${tldrText}\n\n${summaryText}`);
+                const btn = document.getElementById('ai-copy-btn');
+                btn.innerText = '✅';
+                setTimeout(() => btn.innerText = '📋', 2000);
             };
         }
 
+        // Update TLDR text
+        const tldrEl = box.querySelector('#ai-tldr');
+        if (tldrEl) tldrEl.textContent = tldr ? `TLDR: ${tldr}` : '';
+
+        // Update full summary HTML
         box.querySelector('#ai-summary-content').innerHTML = cleanHtml;
-        box.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
 
     function createBtn(text, color) {
