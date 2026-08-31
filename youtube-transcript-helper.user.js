@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         YouTube Transcript: Save & AI (Greasemonkey)
 // @namespace    http://tampermonkey.net/
-// @version      2.0
-// @description  Extracts transcript + metadata, saves as .txt, and displays AI summary
+// @version      2.2
+// @description  Extracts transcript + metadata, saves as .txt, and lets you summarize or chat with AI about the video
 // @author       You
 // @match        https://www.youtube.com/watch*
 // @grant        GM.xmlHttpRequest
@@ -54,6 +54,17 @@ const CONFIG = {
     AI_BUTTON_RESET_DELAY_MS:    3000,
     SAVE_BUTTON_RESET_DELAY_MS:  3000,
 
+    // Chat panel geometry (drag / resize)
+    CHAT_PANEL_MIN_WIDTH:        300,
+    CHAT_PANEL_MIN_HEIGHT:       240,
+    CHAT_PANEL_EDGE_MARGIN:      16,     // min gap kept between panel edge and viewport
+    CHAT_PANEL_KEEP_VISIBLE_PX:  60,     // min panel size that must stay on screen while dragging
+    CHAT_INPUT_MIN_HEIGHT:       60,     // input row min height, incl. padding (border-box)
+    CHAT_HEADER_HEIGHT_PX:       40,     // chat header rendered height (fixed by CSS)
+    CHAT_SPLITTER_HEIGHT_PX:     8,      // splitter strip incl. its border
+    CHAT_PANEL_CONTENT_LOSS_PX:  2,      // panel's own top + bottom border
+    CHAT_MIN_OUTPUT_HEIGHT:      120,    // messages area floor when growing the input row
+
     // Description fallback
     DESCRIPTION_MIN_LENGTH:      50,
     DESCRIPTION_FALLBACK_MIN:    10,
@@ -88,6 +99,7 @@ const STYLES = `
 .yt-tc-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .yt-tc-btn--summarize { background: #065fd4; }
 .yt-tc-btn--save       { background: #2e7d32; }
+.yt-tc-btn--chat       { background: #7b1fa2; }
 
 .yt-tc-settings-btn {
     background: none;
@@ -242,6 +254,148 @@ const STYLES = `
     from { opacity: 0; transform: translateX(-50%) translateY(20px); }
     to   { opacity: 1; transform: translateX(-50%) translateY(0); }
 }
+
+/* Chat panel */
+#yt-tc-chat-panel {
+    box-sizing: border-box;
+    position: fixed;
+    right: 16px;
+    bottom: 16px;
+    width: 380px;
+    min-width: 300px;
+    height: 480px;
+    min-height: 240px;
+    background: var(--yt-spec-base-background, #fff);
+    color: var(--yt-spec-text-primary, #0f0f0f);
+    border: 1px solid var(--yt-spec-10-percent-layer, #ccc);
+    border-radius: 12px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.35);
+    display: flex;
+    flex-direction: column;
+    z-index: 99998;
+    font-family: Roboto, Arial, sans-serif;
+    font-size: 14px;
+}
+#yt-tc-chat-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 12px;
+    font-weight: 600;
+    font-size: 13px;
+    border-bottom: 1px solid var(--yt-spec-10-percent-layer, #ccc);
+    user-select: none;
+    cursor: grab;
+    touch-action: none;
+}
+#yt-tc-chat-header button {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 14px;
+    color: var(--yt-spec-text-primary, #0f0f0f);
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+#yt-tc-chat-header button:hover {
+    background: var(--yt-spec-badge-chip-background-hover, #e5e5e5);
+}
+#yt-tc-chat-messages {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.yt-tc-chat-hint {
+    margin: auto;
+    text-align: center;
+    font-size: 12px;
+    opacity: 0.7;
+    padding: 0 16px;
+}
+.yt-tc-msg {
+    max-width: 85%;
+    padding: 8px 10px;
+    border-radius: 10px;
+    font-size: 13px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+}
+.yt-tc-msg--user {
+    align-self: flex-end;
+    background: #065fd4;
+    color: #fff;
+    border-bottom-right-radius: 3px;
+}
+.yt-tc-msg--assistant {
+    align-self: flex-start;
+    background: var(--yt-spec-badge-chip-background, #f2f2f2);
+    border: 1px solid var(--yt-spec-10-percent-layer, #ccc);
+    border-bottom-left-radius: 3px;
+}
+.yt-tc-msg--error {
+    align-self: flex-start;
+    background: #c62828;
+    color: #fff;
+}
+.yt-tc-msg--typing { opacity: 0.6; }
+#yt-tc-chat-splitter {
+    flex: 0 0 auto;
+    height: 7px;
+    cursor: row-resize;
+    touch-action: none;
+    border-top: 1px solid var(--yt-spec-10-percent-layer, #ccc);
+    background: transparent;
+}
+#yt-tc-chat-splitter:hover {
+    background: var(--yt-spec-badge-chip-background-hover, #e5e5e5);
+}
+#yt-tc-chat-input-row {
+    box-sizing: border-box;
+    flex: 0 0 auto;
+    display: flex;
+    gap: 6px;
+    padding: 8px;
+}
+#yt-tc-chat-input {
+    flex: 1;
+    min-height: 0;
+    resize: none;
+    border: 1px solid var(--yt-spec-10-percent-layer, #ccc);
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-family: inherit;
+    font-size: 13px;
+    background: var(--yt-spec-base-background, #fff);
+    color: var(--yt-spec-text-primary, #0f0f0f);
+    box-sizing: border-box;
+}
+#yt-tc-chat-send {
+    border: none;
+    border-radius: 8px;
+    padding: 0 14px;
+    background: #7b1fa2;
+    color: #fff;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+}
+#yt-tc-chat-send:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Resize handles (window-like borders/corners) */
+.yt-tc-rz { position: absolute; z-index: 2; touch-action: none; }
+.yt-tc-rz--n { top: -3px; left: 8px; right: 8px; height: 6px; cursor: ns-resize; }
+.yt-tc-rz--s { bottom: -3px; left: 8px; right: 8px; height: 6px; cursor: ns-resize; }
+.yt-tc-rz--e { right: -3px; top: 8px; bottom: 8px; width: 6px; cursor: ew-resize; }
+.yt-tc-rz--w { left: -3px; top: 8px; bottom: 8px; width: 6px; cursor: ew-resize; }
+.yt-tc-rz--ne { top: -3px; right: -3px; width: 12px; height: 12px; cursor: nesw-resize; }
+.yt-tc-rz--nw { top: -3px; left: -3px; width: 12px; height: 12px; cursor: nwse-resize; }
+.yt-tc-rz--se { bottom: -3px; right: -3px; width: 14px; height: 14px; cursor: nwse-resize; }
+.yt-tc-rz--sw { bottom: -3px; left: -3px; width: 12px; height: 12px; cursor: nesw-resize; }
 `;
 
 /* ==========================================================================
@@ -302,7 +456,7 @@ function waitForElement(selector, { timeoutMs = 8000, root = document } = {}) {
 /**
  * Create a styled button element.
  * @param {string} text
- * @param {'summarize'|'save'} variant
+ * @param {'summarize'|'chat'|'save'} variant
  * @returns {HTMLButtonElement}
  */
 function createBtn(text, variant) {
@@ -333,6 +487,25 @@ function downloadFile(filename, text) {
  */
 function sanitizeFilename(name) {
     return name.replace(/[\\/:*?"<>|]/g, '').trim() || 'transcript';
+}
+
+/**
+ * Get the current YouTube video id from the URL.
+ * @returns {string}
+ */
+function getVideoId() {
+    return new URLSearchParams(window.location.search).get('v') || '';
+}
+
+/**
+ * Clamp a value between bounds.
+ * @param {number} value
+ * @param {number} lo
+ * @param {number} hi
+ * @returns {number}
+ */
+function clamp(value, lo, hi) {
+    return Math.min(Math.max(value, lo), hi);
 }
 
 /* ==========================================================================
@@ -554,9 +727,10 @@ async function getTranscriptData() {
 /**
  * Generic LLM API call — single entry point for all AI requests.
  * @param {Array<{role: string, content: string}>} messages
+ * @param {object} [extra] - additional request-body fields (e.g. OpenRouter session_id)
  * @returns {Promise<string>}
  */
-async function callLLM(messages) {
+async function callLLM(messages, extra = {}) {
     const url   = await GM.getValue('llm_api_url', '');
     const key   = await GM.getValue('llm_api_key', '');
     const model = await GM.getValue('llm_model', '');
@@ -571,7 +745,7 @@ async function callLLM(messages) {
                 'HTTP-Referer': 'https://youtube.com',
                 'X-Title': 'YT Assistant',
             },
-            data: JSON.stringify({ model, messages }),
+            data: JSON.stringify({ model, messages, ...extra }),
             onload: (res) => {
                 if (res.status === 200) {
                     try {
@@ -627,6 +801,25 @@ Summary: ${fullSummary.substring(0, CONFIG.SUMMARY_MAX_CHARS)}`;
     ]);
 
     return result.replace(/^["']|["']$/g, '').trim();
+}
+
+/**
+ * Build the metadata + transcript context block sent to the LLM.
+ * @param {VideoMetadata} meta
+ * @param {string} transcriptText
+ * @returns {string}
+ */
+function buildContextPrompt(meta, transcriptText) {
+    return `Video Title: ${meta.title}
+Upload Date: ${meta.uploadDate || 'N/A'}
+Duration: ${meta.duration || 'N/A'}
+Views: ${meta.viewCount || 'N/A'}
+Likes: ${meta.likeCount || 'N/A'}
+Genre: ${meta.genre || 'N/A'}
+
+Description: ${meta.description}
+
+Transcript: ${transcriptText.substring(0, CONFIG.TRANSCRIPT_MAX_CHARS)}`;
 }
 
 /* ==========================================================================
@@ -704,6 +897,450 @@ function showSummaryInUI(fullSummary, tldr) {
     if (contentEl) contentEl.innerHTML = cleanHtml;
 
     box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+/* ==========================================================================
+   CHAT — multi-turn conversation about the transcript
+   ========================================================================== */
+
+/** In-memory chat state — reset when the video changes. */
+const chatState = {
+    videoId: null,
+    context: null,   // metadata + transcript block reused for every turn
+    history: [],     // { role: 'user'|'assistant', content: string }
+    sessionId: null, // OpenRouter sticky-routing key (keeps prompt cache warm)
+};
+
+let chatPanelEl = null;
+let chatBusy = false;
+
+const CHAT_SYSTEM_PROMPT = `You are a helpful assistant answering questions about a YouTube video.
+The video metadata and transcript are provided below, followed by the user's questions.
+
+RULES:
+- Base your answers ONLY on the provided metadata and transcript.
+- If the answer is not in the transcript, say so instead of guessing.
+- Earlier messages in this conversation are context — answer follow-up questions using them.
+- Be concise. Reply in plain text. Do NOT use Markdown or HTML.`;
+
+/**
+ * Ensure the chat context (metadata + transcript) matches the current video.
+ * Lazily extracts the transcript on first use; resets history on navigation.
+ * @returns {Promise<string>} the metadata + transcript context block
+ */
+async function ensureChatContext() {
+    const videoId = getVideoId();
+    if (chatState.videoId === videoId && chatState.context) {
+        return chatState.context;
+    }
+
+    chatState.videoId = videoId;
+    chatState.context = null;
+    chatState.history = [];
+    chatState.sessionId = `${videoId || 'yt'}:${Date.now()}`;
+    renderChatMessages();
+
+    const meta = getVideoMetadata();
+    const transcriptData = await getTranscriptData();
+    const cleanText = transcriptData.map(item => item.text).join(' ');
+    chatState.context = buildContextPrompt(meta, cleanText);
+    return chatState.context;
+}
+
+/**
+ * Ask the model one chat question. Multi-turn: system message carries the
+ * full transcript, plus the running user/assistant history.
+ * @param {string} question
+ * @returns {Promise<string>}
+ */
+async function askChat(question) {
+    chatState.history.push({ role: 'user', content: question });
+
+    const [url, model] = await Promise.all([
+        GM.getValue('llm_api_url', ''),
+        GM.getValue('llm_model', ''),
+    ]);
+    const isRouter = url.includes('openrouter.ai');
+
+    const systemContent = `${CHAT_SYSTEM_PROMPT}\n\n${chatState.context}`;
+
+    // Anthropic (via OpenRouter) only caches with an explicit breakpoint;
+    // implicit-cache providers (OpenAI, Gemini, DeepSeek) ignore this.
+    const systemMessage = (isRouter && model.startsWith('anthropic/'))
+        ? { role: 'system', content: [{ type: 'text', text: systemContent, cache_control: { type: 'ephemeral' } }] }
+        : { role: 'system', content: systemContent };
+
+    const messages = [
+        systemMessage,
+        ...chatState.history,
+    ];
+
+    // Pin OpenRouter to one provider for the whole conversation so the
+    // transcript prefix actually hits the same cache each turn.
+    const extra = isRouter ? { session_id: chatState.sessionId } : {};
+
+    try {
+        const answer = await callLLM(messages, extra);
+        chatState.history.push({ role: 'assistant', content: answer });
+        return answer;
+    } catch (e) {
+        chatState.history.pop();  // don't leave an unanswered question in history
+        throw e;
+    }
+}
+
+/**
+ * Append a message bubble to the chat panel.
+ * @param {'user'|'assistant'|'error'} role
+ * @param {string} text
+ * @returns {HTMLDivElement|null}
+ */
+function addChatBubble(role, text) {
+    const list = document.getElementById('yt-tc-chat-messages');
+    if (!list) return null;
+
+    list.querySelector('.yt-tc-chat-hint')?.remove();
+
+    const bubble = document.createElement('div');
+    bubble.className = `yt-tc-msg yt-tc-msg--${role}`;
+    bubble.textContent = text;
+    list.appendChild(bubble);
+    list.scrollTop = list.scrollHeight;
+    return bubble;
+}
+
+/**
+ * Re-render the whole conversation from chatState.history.
+ */
+function renderChatMessages() {
+    const list = document.getElementById('yt-tc-chat-messages');
+    if (!list) return;
+
+    list.innerHTML = '';
+    if (chatState.history.length === 0) {
+        const hint = document.createElement('div');
+        hint.className = 'yt-tc-chat-hint';
+        hint.textContent = 'Ask anything about this video — the AI sees the full transcript.';
+        list.appendChild(hint);
+    } else {
+        for (const msg of chatState.history) addChatBubble(msg.role, msg.content);
+    }
+    list.scrollTop = list.scrollHeight;
+}
+
+/**
+ * Handle sending a chat message from the panel.
+ */
+async function submitChatMessage() {
+    if (chatBusy) return;
+
+    const input   = document.getElementById('yt-tc-chat-input');
+    const sendBtn = document.getElementById('yt-tc-chat-send');
+    const question = input.value.trim();
+    if (!question) return;
+
+    const apiKey = await GM.getValue('llm_api_key', '');
+    if (!apiKey) {
+        showToast('Click ⚙️ to set API Key!', 'error');
+        return;
+    }
+
+    chatBusy = true;
+    input.value = '';
+    input.disabled = true;
+    sendBtn.disabled = true;
+
+    let typing = null;
+    let userShown = false;
+    try {
+        await ensureChatContext();  // may reset the panel on video change
+
+        addChatBubble('user', question);
+        userShown = true;
+        typing = addChatBubble('assistant', '⋯');
+        typing?.classList.add('yt-tc-msg--typing');
+
+        const answer = await askChat(question);
+        typing?.remove();
+        addChatBubble('assistant', answer);
+    } catch (e) {
+        typing?.remove();
+        if (!userShown) addChatBubble('user', question);
+        addChatBubble('error', `❌ ${e.message}`);
+    } finally {
+        chatBusy = false;
+        input.disabled = false;
+        sendBtn.disabled = false;
+        input.focus();
+    }
+}
+
+/**
+ * Create the chat panel on first use (persistent; hidden when closed).
+ * @returns {HTMLDivElement}
+ */
+function getOrCreateChatPanel() {
+    if (chatPanelEl && document.body.contains(chatPanelEl)) return chatPanelEl;
+
+    const panel = document.createElement('div');
+    panel.id = 'yt-tc-chat-panel';
+    panel.style.display = 'none';
+    panel.innerHTML = `
+        <div id="yt-tc-chat-header">
+            <span>💬 Chat with AI</span>
+            <div style="display: flex; gap: 4px;">
+                <button id="yt-tc-chat-clear" title="Clear conversation">🗑</button>
+                <button id="yt-tc-chat-close" title="Close chat">✕</button>
+            </div>
+        </div>
+        <div id="yt-tc-chat-messages"></div>
+        <div id="yt-tc-chat-splitter" title="Drag to resize input area"></div>
+        <div id="yt-tc-chat-input-row">
+            <textarea id="yt-tc-chat-input" placeholder="Ask about this video… (Enter to send)" rows="2"></textarea>
+            <button id="yt-tc-chat-send">Send</button>
+        </div>
+    `;
+    document.body.appendChild(panel);
+    chatPanelEl = panel;
+
+    panel.querySelector('#yt-tc-chat-close').addEventListener('click', () => { panel.style.display = 'none'; });
+    panel.querySelector('#yt-tc-chat-clear').addEventListener('click', () => {
+        chatState.history = [];
+        renderChatMessages();
+    });
+    panel.querySelector('#yt-tc-chat-send').addEventListener('click', submitChatMessage);
+    panel.querySelector('#yt-tc-chat-input').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            submitChatMessage();
+        }
+    });
+
+    setupChatPanelChrome(panel);
+    restoreChatLayout(panel);
+
+    renderChatMessages();
+    return panel;
+}
+
+/**
+ * Show/hide the chat panel.
+ */
+function toggleChatPanel() {
+    const panel = getOrCreateChatPanel();
+    const wasHidden = panel.style.display === 'none';
+    panel.style.display = wasHidden ? 'flex' : 'none';
+    if (wasHidden) {
+        renderChatMessages();
+        reClampPanelIntoView(panel);
+        panel.querySelector('#yt-tc-chat-input').focus();
+    }
+}
+
+/**
+ * Drop chat state immediately when the page navigates to a different video,
+ * so an open panel never shows the previous video's conversation.
+ */
+function resetChatIfStale() {
+    if (chatState.videoId && chatState.videoId !== getVideoId()) {
+        chatState.videoId = null;
+        chatState.context = null;
+        chatState.history = [];
+        renderChatMessages();
+    }
+}
+
+/* ---------------- panel move / resize ---------------- */
+
+/** GM storage key for the chat panel layout (position, size, input split). */
+const CHAT_LAYOUT_KEY = 'chat_panel_layout';
+
+const CHAT_RESIZE_CURSORS = {
+    n: 'ns-resize', s: 'ns-resize', e: 'ew-resize', w: 'ew-resize',
+    ne: 'nesw-resize', sw: 'nesw-resize', nw: 'nwse-resize', se: 'nwse-resize',
+};
+
+/**
+ * Set explicit geometry on the panel.
+ */
+function applyPanelRect(panel, left, top, width, height) {
+    panel.style.left = `${left}px`;
+    panel.style.top = `${top}px`;
+    panel.style.width = `${width}px`;
+    panel.style.height = `${height}px`;
+}
+
+/**
+ * Switch the panel from CSS right/bottom anchoring to explicit left/top
+ * so all drag math works in a single stable frame. Idempotent.
+ * @param {HTMLDivElement} panel
+ */
+function anchorPanelToRect(panel) {
+    if (panel.dataset.anchored === '1') return;
+    const r = panel.getBoundingClientRect();
+    applyPanelRect(panel, r.left, r.top, r.width, r.height);
+    panel.style.right = 'auto';
+    panel.style.bottom = 'auto';
+    panel.dataset.anchored = '1';
+}
+
+/**
+ * Generic pointer drag: track moves until up/cancel, pinning the cursor.
+ * @param {PointerEvent} startEvent
+ * @param {string} cursor - cursor to pin while dragging
+ * @param {function(PointerEvent): void} onMove
+ * @param {function(): void} [onEnd]
+ */
+function trackPointerDrag(startEvent, cursor, onMove, onEnd) {
+    startEvent.preventDefault();
+    const move = (ev) => onMove(ev);
+    const end = () => {
+        window.removeEventListener('pointermove', move);
+        window.removeEventListener('pointerup', end);
+        window.removeEventListener('pointercancel', end);
+        document.documentElement.style.cursor = '';
+        document.body.style.userSelect = '';
+        if (onEnd) onEnd();
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', end);
+    window.addEventListener('pointercancel', end);
+    document.documentElement.style.cursor = cursor;
+    document.body.style.userSelect = 'none';
+}
+
+/**
+ * Clamp a previously positioned panel back onto the viewport
+ * (the browser window may have been resized while the panel was hidden).
+ * @param {HTMLDivElement} panel
+ */
+function reClampPanelIntoView(panel) {
+    if (panel.dataset.anchored !== '1') return;
+    const r = panel.getBoundingClientRect();
+    const left = clamp(r.left, CONFIG.CHAT_PANEL_KEEP_VISIBLE_PX - r.width, window.innerWidth - CONFIG.CHAT_PANEL_KEEP_VISIBLE_PX);
+    const top = clamp(r.top, 0, Math.max(0, window.innerHeight - CONFIG.CHAT_PANEL_KEEP_VISIBLE_PX));
+    panel.style.left = `${left}px`;
+    panel.style.top = `${top}px`;
+}
+
+/**
+ * Maximum input-row height for a given panel height (border-box).
+ * Uses the CSS-fixed chrome heights so it evaluates identically whether
+ * the panel is visible or hidden (offsetHeight is 0 while hidden).
+ * @param {number} panelHeight
+ * @returns {number}
+ */
+function maxInputRowHeight(panelHeight) {
+    return Math.max(
+        CONFIG.CHAT_INPUT_MIN_HEIGHT,
+        panelHeight - CONFIG.CHAT_PANEL_CONTENT_LOSS_PX - CONFIG.CHAT_HEADER_HEIGHT_PX
+            - CONFIG.CHAT_SPLITTER_HEIGHT_PX - CONFIG.CHAT_MIN_OUTPUT_HEIGHT
+    );
+}
+
+/**
+ * Persist the panel layout (position, size, input-row height).
+ */
+function saveChatLayout() {
+    if (!chatPanelEl) return;
+    const r = chatPanelEl.getBoundingClientRect();
+    const row = chatPanelEl.querySelector('#yt-tc-chat-input-row').getBoundingClientRect();
+    GM.setValue(CHAT_LAYOUT_KEY, JSON.stringify({
+        left: Math.round(r.left), top: Math.round(r.top),
+        width: Math.round(r.width), height: Math.round(r.height),
+        inputRow: Math.round(row.height),
+    }));
+}
+
+/**
+ * Restore a persisted panel layout (no-op when nothing was saved).
+ * @param {HTMLDivElement} panel
+ */
+function restoreChatLayout(panel) {
+    GM.getValue(CHAT_LAYOUT_KEY, '').then((raw) => {
+        if (!raw) return;
+        let l;
+        try { l = JSON.parse(raw); } catch { return; }  // corrupt layout — ignore
+
+        const width = clamp(l.width || 0, CONFIG.CHAT_PANEL_MIN_WIDTH, window.innerWidth - 2 * CONFIG.CHAT_PANEL_EDGE_MARGIN);
+        const height = clamp(l.height || 0, CONFIG.CHAT_PANEL_MIN_HEIGHT, window.innerHeight - 2 * CONFIG.CHAT_PANEL_EDGE_MARGIN);
+        panel.dataset.anchored = '1';
+        applyPanelRect(panel, l.left ?? CONFIG.CHAT_PANEL_EDGE_MARGIN, l.top ?? CONFIG.CHAT_PANEL_EDGE_MARGIN, width, height);
+        panel.style.right = 'auto';
+        panel.style.bottom = 'auto';
+        reClampPanelIntoView(panel);
+
+        if (l.inputRow) {
+            const row = panel.querySelector('#yt-tc-chat-input-row');
+            row.style.height = `${clamp(l.inputRow, CONFIG.CHAT_INPUT_MIN_HEIGHT, maxInputRowHeight(height))}px`;
+        }
+    });
+}
+
+/**
+ * Wire header-drag (move), border/corner handles (resize) and the
+ * messages/input splitter (input vs output ratio).
+ * @param {HTMLDivElement} panel
+ */
+function setupChatPanelChrome(panel) {
+    const header = panel.querySelector('#yt-tc-chat-header');
+    const splitter = panel.querySelector('#yt-tc-chat-splitter');
+    const inputRow = panel.querySelector('#yt-tc-chat-input-row');
+
+    /* Move: drag the title bar (header buttons excluded). */
+    header.addEventListener('pointerdown', (e) => {
+        if (e.target.closest('button')) return;
+        anchorPanelToRect(panel);
+        const r = panel.getBoundingClientRect();
+        const offX = e.clientX - r.left;
+        const offY = e.clientY - r.top;
+        trackPointerDrag(e, 'grabbing', (ev) => {
+            const left = clamp(ev.clientX - offX, CONFIG.CHAT_PANEL_KEEP_VISIBLE_PX - r.width, window.innerWidth - CONFIG.CHAT_PANEL_KEEP_VISIBLE_PX);
+            const top = clamp(ev.clientY - offY, 0, window.innerHeight - CONFIG.CHAT_PANEL_KEEP_VISIBLE_PX);
+            panel.style.left = `${left}px`;
+            panel.style.top = `${top}px`;
+        }, saveChatLayout);
+    });
+
+    /* Resize: 8 invisible handles on the borders and corners. */
+    for (const [dir, cursor] of Object.entries(CHAT_RESIZE_CURSORS)) {
+        const handle = document.createElement('div');
+        handle.className = `yt-tc-rz yt-tc-rz--${dir}`;
+        handle.addEventListener('pointerdown', (e) => {
+            anchorPanelToRect(panel);
+            const r = panel.getBoundingClientRect();
+            const sx = e.clientX;
+            const sy = e.clientY;
+            trackPointerDrag(e, cursor, (ev) => {
+                const dx = ev.clientX - sx;
+                const dy = ev.clientY - sy;
+                let { left, top, width, height } = r;
+                if (dir.includes('e')) width = r.width + dx;
+                if (dir.includes('s')) height = r.height + dy;
+                if (dir.includes('w')) width = r.width - dx;
+                if (dir.includes('n')) height = r.height - dy;
+                width = clamp(width, CONFIG.CHAT_PANEL_MIN_WIDTH, window.innerWidth);
+                height = clamp(height, CONFIG.CHAT_PANEL_MIN_HEIGHT, window.innerHeight);
+                if (dir.includes('w')) left = r.right - width;
+                if (dir.includes('n')) top = r.bottom - height;
+                left = Math.max(left, CONFIG.CHAT_PANEL_KEEP_VISIBLE_PX - width);
+                top = Math.max(top, 0);
+                applyPanelRect(panel, left, top, width, height);
+            }, saveChatLayout);
+        });
+        panel.appendChild(handle);
+    }
+
+    /* Split: drag the divider between messages and input row. */
+    splitter.addEventListener('pointerdown', (e) => {
+        const startY = e.clientY;
+        const startH = inputRow.getBoundingClientRect().height;
+        const maxH = maxInputRowHeight(panel.getBoundingClientRect().height);
+        trackPointerDrag(e, 'row-resize', (ev) => {
+            const h = clamp(startH + (startY - ev.clientY), CONFIG.CHAT_INPUT_MIN_HEIGHT, maxH);
+            inputRow.style.height = `${h}px`;
+        }, saveChatLayout);
+    });
 }
 
 /**
@@ -802,16 +1439,7 @@ async function injectUI() {
 
             aiBtn.textContent = '🚀 Thinking...';
 
-            const prompt = `Video Title: ${meta.title}
-Upload Date: ${meta.uploadDate || 'N/A'}
-Duration: ${meta.duration || 'N/A'}
-Views: ${meta.viewCount || 'N/A'}
-Likes: ${meta.likeCount || 'N/A'}
-Genre: ${meta.genre || 'N/A'}
-
-Description: ${meta.description}
-
-Transcript: ${cleanText.substring(0, CONFIG.TRANSCRIPT_MAX_CHARS)}`;
+            const prompt = buildContextPrompt(meta, cleanText);
 
             // Step 1: Full summary
             aiBtn.textContent = '📝 Summarizing...';
@@ -875,6 +1503,10 @@ ${formattedTranscript}`;
         }, CONFIG.SAVE_BUTTON_RESET_DELAY_MS);
     });
 
+    /* --- Chat button --- */
+    const chatBtn = createBtn('💬 Chat', 'chat');
+    chatBtn.addEventListener('click', toggleChatPanel);
+
     /* --- Settings button --- */
     const settingsBtn = document.createElement('button');
     settingsBtn.className = 'yt-tc-settings-btn';
@@ -882,7 +1514,7 @@ ${formattedTranscript}`;
     settingsBtn.title = 'Settings';
     settingsBtn.addEventListener('click', showSettingsDialog);
 
-    container.append(aiBtn, saveBtn, settingsBtn);
+    container.append(aiBtn, chatBtn, saveBtn, settingsBtn);
     target.appendChild(container);
 }
 
@@ -903,6 +1535,7 @@ ${formattedTranscript}`;
         const currentUrl = location.href;
         if (currentUrl !== lastUrl) {
             lastUrl = currentUrl;
+            resetChatIfStale();
             cooldown = true;
             setTimeout(() => { cooldown = false; }, CONFIG.OBSERVER_COOLDOWN_MS);
             // Wait for page content to settle
